@@ -1,0 +1,174 @@
+package org.firstinspires.ftc.teamcode.code.pipelines;
+
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
+
+/**
+ * Two-motor flywheel velocity controller.
+ */
+public final class FlyWheelPID {
+
+    private static final String MOTOR_1_NAME = "Shooter1";
+    private static final String MOTOR_2_NAME = "Shooter2";
+    private static final double TICKS_PER_REVOLUTION = 28.0;
+
+    public static final double CLOSE_SHOT_RPM = 2900.0;
+
+    public double shot_rpm = 0.0;
+    // public static final double DEFAULT_SHOT_RPM = 3500.0;
+    // public static final double INTAKE_RPM = 200.0;
+
+    private static final double KP = 1.02;
+    private static final double KI = 0.0;
+    private static final double KD = 0.0;
+    private static final double KF = 21.88;
+
+    private static final double READY_TOLERANCE_RPM = 75.0;
+
+    private DcMotorEx flywheel1, flywheel2;
+
+    private double targetRpm;
+    private boolean currentIntakeDir = false;
+    private boolean requestedIntakeDir = false;
+    private boolean waitingForDirChange = false;
+    private double commandedRpm = 0;
+    private static final double RPM_RAMP_RATE = 100.0; // RPM per update loop
+    private static final double DIRECTION_CHANGE_RPM = 100.0;
+    private double currentRpm1, currentRpm2;
+    private boolean running;
+
+    public void init(HardwareMap hardwareMap) {
+        flywheel1 = hardwareMap.get(DcMotorEx.class, MOTOR_1_NAME);
+        flywheel2 = hardwareMap.get(DcMotorEx.class, MOTOR_2_NAME);
+
+        flywheel1.setDirection(DcMotor.Direction.REVERSE);
+        flywheel2.setDirection(DcMotor.Direction.REVERSE);
+
+
+        flywheel1.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        flywheel2.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+
+        flywheel1.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        flywheel2.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+
+        flywheel1.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        flywheel2.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+
+        flywheel1.setPIDFCoefficients(
+                DcMotor.RunMode.RUN_USING_ENCODER,
+                new PIDFCoefficients(KP, KI, KD, KF)
+        );
+
+        flywheel2.setPIDFCoefficients(
+                DcMotor.RunMode.RUN_USING_ENCODER,
+                new PIDFCoefficients(KP, KI, KD, KF)
+        );
+
+        stop();
+    }
+
+    public void shootClose() {
+        setTargetRpm(CLOSE_SHOT_RPM);
+    }
+
+    public void shootDefault(double rpm, boolean intake) {
+        if (intake){
+            flywheel1.setDirection(DcMotor.Direction.FORWARD);
+            flywheel2.setDirection(DcMotor.Direction.FORWARD);
+        } else {
+            flywheel1.setDirection(DcMotor.Direction.REVERSE);
+            flywheel2.setDirection(DcMotor.Direction.REVERSE);
+        }
+        setTargetRpm(rpm);
+    }
+
+//    public void IntakeMode() {
+//        setTargetRpm(INTAKE_RPM);
+//    }
+
+    public void setTargetRpm(double rpm) {
+        targetRpm = rpm;
+        running = rpm != 0.0;
+    }
+
+    /**
+     * Call once every opmode loop so the target velocity is continuously held.
+     */
+    public void update() {
+        currentRpm1 = ticksPerSecondToRpm(Math.abs(flywheel1.getVelocity()));
+        currentRpm2 = ticksPerSecondToRpm(Math.abs(flywheel2.getVelocity()));
+
+        if (running) {
+            flywheel1.setVelocity(rpmToTicksPerSecond(targetRpm));
+            flywheel2.setVelocity(rpmToTicksPerSecond(targetRpm));
+        } else {
+            flywheel1.setPower(0.0);
+            flywheel2.setPower(0.0);
+        }
+    }
+
+    public void stop() {
+        running = false;
+        targetRpm = 0.0;
+        currentRpm1 = 0.0;
+        currentRpm2 = 0.0;
+        if (flywheel1 != null && flywheel2 != null) {
+            flywheel1.setPower(0.0);
+            flywheel2.setPower(0.0);
+        }
+    }
+
+    public boolean isAtSpeed() {
+        return running &&
+                Math.abs(Math.abs(targetRpm) - getAvgCurrentRpm())
+                        <= READY_TOLERANCE_RPM;
+    }
+
+    public boolean isRunning() {
+        return running;
+    }
+
+    public double getTargetRpm() {
+        return targetRpm;
+    }
+
+    public double getCurrentRpm(int which) {
+        return which == 1 ? currentRpm1 : currentRpm2;
+    }
+    public double getAvgCurrentRpm() {
+        return (currentRpm1 + currentRpm2) / 2.0;
+    }
+
+    public double getErrorRpm(int which) {
+        return targetRpm - (which == 1 ? currentRpm1 : currentRpm2);
+    }
+    public double getAvgErrorRpm() {
+        return Math.abs(targetRpm) - getAvgCurrentRpm();
+    }
+
+    public double getPower(int whichflywheel) {
+        DcMotorEx flywheel = whichflywheel == 1 ? flywheel1 : flywheel2;
+        if (flywheel == null) {
+            return 0.0;
+        }
+        return flywheel.getPower();
+    }
+    public double getAvgPower() {
+        if (flywheel1 == null || flywheel2 == null) {
+            return 0.0;
+        }
+        return (flywheel1.getPower() + flywheel2.getPower()) / 2.0;
+    }
+
+    private double rpmToTicksPerSecond(double rpm) {
+        return (rpm / 60.0) * TICKS_PER_REVOLUTION;
+    }
+
+    private double ticksPerSecondToRpm(double ticksPerSecond) {
+        return (ticksPerSecond / TICKS_PER_REVOLUTION) * 60.0;
+    }
+}
+
