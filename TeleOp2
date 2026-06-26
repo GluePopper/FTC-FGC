@@ -1,0 +1,271 @@
+package org.firstinspires.ftc.teamcode.code;
+
+import android.os.storage.StorageManager;
+
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.CRServo;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.VoltageSensor;
+
+import com.qualcomm.hardware.lynx.LynxModule;
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+import org.firstinspires.ftc.teamcode.code.pipelines.FlyWheelPID;
+import org.firstinspires.ftc.teamcode.code.pipelines.TankDrive;
+
+@TeleOp(name = "PaDodo", group = "Competition")
+public class FGC extends LinearOpMode {
+
+    //Pipeline
+    private TankDrive tankDrive = new TankDrive();
+    private FlyWheelPID shooter = new FlyWheelPID();
+
+    //Actuators
+    private DcMotor Intake = null;
+    private DcMotor Climber = null;
+    private DcMotor Indexer = null;
+    private CRServo Storage1, Storage2 = null;
+    private Servo StorageOpener = null;
+
+
+    //Controller variables
+    boolean previousLeftBumper = false;
+    boolean previousDpadUp = false;
+    boolean previousDpadLeft = false;
+    double multiplier = 0;
+    boolean disableMovement = false;
+    private boolean canFeed = false;
+    private VoltageSensor batteryVoltageSensor;
+    private enum ShooterMode {
+        OFF,
+        INTAKE,
+        SHOOT
+    }
+    private ShooterMode shooterMode = ShooterMode.OFF;
+
+
+    @Override
+    public void runOpMode() {
+        // Initialize tank drive
+        tankDrive.init(hardwareMap);
+        shooter.init(hardwareMap);
+
+//        Linkage1 = hardwareMap.get(DcMotorEx.class, "Linkage1");
+//        Linkage2 = hardwareMap.get(DcMotorEx.class, "Linkage2");
+//        Linkage2.setDirection(DcMotor.Direction.REVERSE);
+        batteryVoltageSensor = hardwareMap.voltageSensor.iterator().next();
+
+        Intake = hardwareMap.get(DcMotor.class, "Intake");
+        Climber = hardwareMap.get(DcMotor.class, "Climber");
+        Indexer = hardwareMap.get(DcMotor.class, "Indexer");
+        Storage1 = hardwareMap.get(CRServo.class, "Storage1");
+        Storage2 = hardwareMap.get(CRServo.class, "Storage2");
+        StorageOpener = hardwareMap.get(Servo.class, "StorageOpener");
+
+        telemetry.addData("Status", "✓ Initialized!");
+        telemetry.addData("Mode", "Arcade Drive");
+        telemetry.addLine();
+        telemetry.addData("Controls", "Left stick Y: Drive | Right stick X: Turn");
+        telemetry.addData("Boost", "Right Bumper");
+        telemetry.addData("Shooter", "D-pad Up: Toggle 3500 RPM PID");
+        telemetry.update();
+
+        waitForStart();
+
+        while (opModeIsActive()) {
+            // Left stick Y for forward/backward
+            double drive = -gamepad1.left_stick_y*multiplier;
+            // Right stick X for turning
+            double turn = -gamepad1.right_stick_x*multiplier;
+
+            // Enable boost with right bumper
+            tankDrive.setBoost(gamepad1.right_bumper);
+
+            // Drive with arcade controls (includes turning!)
+            tankDrive.driveArcade(drive, turn);
+
+            //Storage
+            if (gamepad1.y) {
+                Storage1.setPower(-1);
+                Storage2.setPower(1);
+            } else if (gamepad1.a) {
+                Storage1.setPower(1);
+                Storage2.setPower(-1);
+            } else{
+                Storage1.setPower(0);
+                Storage2.setPower(0);
+            }
+
+            if (gamepad1.b) {
+                StorageOpener.setPosition(1);
+            } else if (gamepad1.x){
+                StorageOpener.setPosition(0.8);
+            }
+
+
+            //Intake Mode
+            if (gamepad1.left_bumper && !previousLeftBumper) {
+
+                if (shooterMode == ShooterMode.INTAKE) {
+                    shooterMode = ShooterMode.OFF;
+                } else {
+                    shooterMode = ShooterMode.INTAKE;
+                }
+            }
+            previousLeftBumper = gamepad1.left_bumper;
+
+
+            //Shoot Mode
+            if (gamepad1.dpad_up && !previousDpadUp) {
+
+                if (shooterMode == ShooterMode.SHOOT) {
+                    shooterMode = ShooterMode.OFF;
+                } else {
+                    shooterMode = ShooterMode.SHOOT;
+                }
+            }
+            previousDpadUp = gamepad1.dpad_up;
+
+
+            // Apply current mode
+            switch (shooterMode) {
+
+                case OFF:
+                    shooter.stop();
+                    Intake.setPower(0);
+//                    Indexer.setPower(0);
+                    canFeed = false;
+                    break;
+
+                case INTAKE:
+
+                    shooter.shootDefault(2000.0, true);
+
+                    if (shooter.isSwitchingDirection()) {
+                        Intake.setPower(0);
+                        Indexer.setPower(0);
+
+                    } else {
+                        Intake.setPower(0.6);
+                        Indexer.setPower(0.6);
+                    }
+
+                    break;
+
+                case SHOOT:
+
+                    shooter.shootDefault(3500.0, false);
+
+                    if (shooter.isSwitchingDirection()) {
+                        Indexer.setPower(0);
+                    } else {
+
+                        if (!canFeed && shooter.getAvgCurrentRpm() >= 2500) {
+                            canFeed = true;
+                        } else if (canFeed && shooter.getAvgCurrentRpm() <= 2300) {
+                            canFeed = false;
+                        }
+
+                        Indexer.setPower(canFeed ? 0.6 : 0);
+                    }
+
+                    break;
+            }
+
+            shooter.update();
+
+            //                    if (shooter.getAvgCurrentRpm() < 2700) {
+//                        Indexer.setPower(0);
+//                    } else if (shooter.getAvgCurrentRpm() > 2700){
+//                        Indexer.setPower(-0.6);
+//                    }
+
+            if (!disableMovement && gamepad1.right_trigger > 0.5 && gamepad1.left_trigger > 0.5) {
+                disableMovement = true;
+            } else if (disableMovement && gamepad1.right_trigger > 0.5 && gamepad1.left_trigger > 0.5) {
+                disableMovement = false;
+            }
+
+            if (disableMovement){
+                multiplier = 0;
+            } else {
+                multiplier = 1;
+            }
+
+            //            if (gamepad1.dpad_left && !previousDpadLeft){
+//                intakeFOn = !intakeFOn;
+//            }
+//            previousDpadLeft = gamepad1.dpad_left;
+//
+//            Intake.setPower(intakeFOn ? 1 : 0);
+
+//            if (gamepad1.dpad_up) {
+//                Climber.setPower(1);
+//            } else if (gamepad1.dpad_down) {
+//                Climber.setPower(-1);
+//            } else{
+//                Climber.setPower(0);
+//            }
+
+//            if (gamepad1.x){
+//                Transfer.setPower(0.7);
+//            } else if (gamepad1.b){
+//                Transfer.setPower(-0.7);
+//            } else{
+//                Transfer.setPower(0);
+//            }
+
+            double batteryVoltage = batteryVoltageSensor.getVoltage();
+
+//            double linkage1Current = Linkage1.getCurrent(CurrentUnit.AMPS);
+//            double linkage2Current = Linkage2.getCurrent(CurrentUnit.AMPS);
+//
+//            double linkage1EstimatedVoltage = batteryVoltage * Math.abs(Linkage1.getPower());
+//            double linkage2EstimatedVoltage = batteryVoltage * Math.abs(Linkage2.getPower());
+
+            telemetry.addLine("=== LINKAGE ELECTRICAL ===");
+            telemetry.addData("Battery Voltage", "%.2f V", batteryVoltage);
+
+//            telemetry.addData("Linkage1 Current", "%.2f A", linkage1Current);
+//            telemetry.addData("Linkage2 Current", "%.2f A", linkage2Current);
+
+//            telemetry.addData("Linkage1 Est. Voltage", "%.2f V", linkage1EstimatedVoltage);
+//            telemetry.addData("Linkage2 Est. Voltage", "%.2f V", linkage2EstimatedVoltage);
+            telemetry.addLine();
+
+            // Telemetry
+            telemetry.addData("Drive Mode", "Arcade (Drive + Turn)");
+            telemetry.addData("Boost", tankDrive.isBoostActive() ? "🚀 ON" : "OFF");
+            telemetry.addData("Drive", "%.2f", drive);
+            telemetry.addData("Turn", "%.2f", turn);
+            telemetry.addData("Multiplier", "%.2f", multiplier);
+            telemetry.addLine();
+
+            telemetry.addLine("=== SHOOTER RPM ===");
+            telemetry.addData("Shooter Running", shooter.isRunning());
+            telemetry.addData("Ready", shooter.isAtSpeed() ? "YES" : "NO");
+            telemetry.addData("Target RPM", "%.0f", shooter.getTargetRpm());
+            telemetry.addData("Shooter 1 RPM", "%.0f", shooter.getCurrentRpm(1));
+            telemetry.addData("Shooter 2 RPM", "%.0f", shooter.getCurrentRpm(2));
+            telemetry.addData("Average RPM", "%.0f", shooter.getAvgCurrentRpm());
+            telemetry.addData("Average Error", "%.0f RPM", shooter.getAvgErrorRpm());
+
+            telemetry.addData("Shooter Mode", shooterMode);
+            telemetry.addData("Can Feed", canFeed);
+            telemetry.addData("Switching Dir", shooter.isSwitchingDirection());
+            telemetry.addLine();
+
+            telemetry.addLine("=== ENCODERS ===");
+            telemetry.addData("Left Side", tankDrive.getLeftSideEncoder());
+            telemetry.addData("Right Side", tankDrive.getRightSideEncoder());
+
+            telemetry.update();
+        }
+
+        // Cleanup
+        shooter.stop();
+        tankDrive.stop();
+    }
+}
